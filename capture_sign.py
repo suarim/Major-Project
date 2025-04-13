@@ -191,6 +191,8 @@ if __name__ == '__main__':
         sign_idx = prediction['outputs'].argmax()
         sign_name = ORD2SIGN[sign_idx]
         confidence = prediction['outputs'].max()
+        if confidence < 0.35 or np.isnan(confidence):
+            continue
         
         window_predictions.append((i, sign_name, confidence))
         print(f"Window {i+1}: Predicted sign '{sign_name}' with confidence {confidence:.4f}")
