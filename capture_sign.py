@@ -4,6 +4,9 @@ import pandas as pd
 import tensorflow as tf
 import matplotlib.pyplot as plt
 import numpy as np
+import time  
+import requests 
+import os 
 
 mp_drawing = mp.solutions.drawing_utils
 mp_drawing_styles = mp.solutions.drawing_styles
@@ -54,12 +57,15 @@ def do_capture_loop(xyz):
         curr_frame_time = 0
         fps = 0
 
+        # Timer variables
+        start_time = time.time()
+
         with mp_holistic.Holistic(
             min_detection_confidence=0.5,
             min_tracking_confidence=0.5) as holistic:
-            frame = 0
+            frame_num = 0  # Use frame_num instead of frame to avoid conflict
             while cap.isOpened():
-                frame += 1
+                frame_num += 1
                 success, image = cap.read()
                 if not success:
                     print("Ignoring empty camera frame.")
@@ -71,11 +77,17 @@ def do_capture_loop(xyz):
                     fps = cv2.getTickFrequency() / (curr_frame_time - prev_frame_time)
                 prev_frame_time = curr_frame_time
 
+                # Calculate elapsed time
+                elapsed_time = int(time.time() - start_time)
+                minutes = elapsed_time // 60
+                seconds = elapsed_time % 60
+                timer_text = f"Time: {minutes:02d}:{seconds:02d}"
+
                 image.flags.writeable = False
                 image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
                 results = holistic.process(image)
                 
-                landmarks = create_frame_landmarks_df(results, frame, xyz)
+                landmarks = create_frame_landmarks_df(results, frame_num, xyz)
                 all_landmarks.append(landmarks)
                 
                 image.flags.writeable = True
@@ -94,12 +106,15 @@ def do_capture_loop(xyz):
                 
                 # Put FPS text on image
                 cv2.putText(image, f"FPS: {fps:.1f}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+
+                # Put Timer text on image
+                cv2.putText(image, timer_text, (image.shape[1] - 200, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
                 
                 cv2.imshow('MediaPipe Holistic', cv2.flip(image, 1))
                 if cv2.waitKey(5) & 0xFF == 27:
                     break
         
-        print(f"Total frames captured in video stream: {frame}")
+        print(f"Total frames captured in video stream: {frame_num}") # Use frame_num
         cap.release()
     except Exception as e:
         print(f"Exception occurred: {e}")
@@ -161,47 +176,110 @@ if __name__ == '__main__':
     if landmarks:
         frame_count = max([df['frame'].max() for df in landmarks]) if landmarks else 0
         print(f"Captured {frame_count} frames")
+    else:
+        # Handle the case where landmarks might be empty or capture failed
+        print("No landmarks captured or capture failed.")
+        frame_count = 0
     
     # Combine all landmarks into a DataFrame
-    combined_landmarks = pd.concat(landmarks).reset_index(drop=True)
-    combined_landmarks.to_parquet('output.parquet')
-    ROWS_PER_FRAME = 543
+    if landmarks: # Only proceed if landmarks were captured
+        combined_landmarks = pd.concat(landmarks).reset_index(drop=True)
+        combined_landmarks.to_parquet('output.parquet')
+        ROWS_PER_FRAME = 543 # Define this earlier or pass as argument if needed
 
-    interpreter = tf.lite.Interpreter("model.tflite")
-    interpreter.allocate_tensors()
-    found_signatures = list(interpreter.get_signature_list().keys())
-    prediction_fn = interpreter.get_signature_runner("serving_default")
+        interpreter = tf.lite.Interpreter("model.tflite")
+        interpreter.allocate_tensors()
+        found_signatures = list(interpreter.get_signature_list().keys())
+        prediction_fn = interpreter.get_signature_runner("serving_default")
 
-    train = pd.read_csv("./train.csv")
-    train['sign_ord'] = train['sign'].astype('category').cat.codes
+        train = pd.read_csv("train.csv")
+        train['sign_ord'] = train['sign'].astype('category').cat.codes
 
-    SIGN2ORD = train[['sign', 'sign_ord']].set_index('sign').squeeze().to_dict()
-    ORD2SIGN = train[['sign_ord', 'sign']].set_index('sign_ord').squeeze().to_dict()
-    
-    # Create windows of frames
-    print("\nProcessing frames in windows of 20 frames with 3 frame overlap")
-    windows = create_frame_windows(combined_landmarks, window_size=7, overlap=3)
-    print(f"Created {len(windows)} windows")
-    
-    # Process each window
-    window_predictions = []
-    for i, window_data in enumerate(windows):
-        # Get prediction for window
-        prediction = prediction_fn(inputs=window_data)
-        sign_idx = prediction['outputs'].argmax()
-        sign_name = ORD2SIGN[sign_idx]
-        confidence = prediction['outputs'].max()
+        SIGN2ORD = train[['sign', 'sign_ord']].set_index('sign').squeeze().to_dict()
+        ORD2SIGN = train[['sign_ord', 'sign']].set_index('sign_ord').squeeze().to_dict()
         
-        window_predictions.append((i, sign_name, confidence))
-        print(f"Window {i+1}: Predicted sign '{sign_name}' with confidence {confidence:.4f}")
-    
-    # Print overall most common prediction
-    if window_predictions:
-        sign_counts = {}
-        for _, sign, _ in window_predictions:
-            sign_counts[sign] = sign_counts.get(sign, 0) + 1
+        # Create windows of frames
+        print("\nProcessing frames in windows of 5 frames with 3 frame overlap")
+        windows = create_frame_windows(combined_landmarks, window_size=5, overlap=3)
+        print(f"Created {len(windows)} windows")
         
-        most_common_sign = max(sign_counts.items(), key=lambda x: x[1])[0]
-        print(f"\nMost common prediction: '{most_common_sign}' ({sign_counts[most_common_sign]}/{len(window_predictions)} windows)")
-    else:
-        print("No predictions made")
+        # Process each window
+        window_predictions = []
+        for i, window_data in enumerate(windows):
+            # Get prediction for window
+            prediction = prediction_fn(inputs=window_data)
+            sign_idx = prediction['outputs'].argmax()
+            # Check if sign_idx is valid before accessing ORD2SIGN
+            if sign_idx not in ORD2SIGN:
+                print(f"Window {i+1}: Invalid sign index {sign_idx}. Skipping.")
+                continue
+                
+            sign_name = ORD2SIGN[sign_idx]
+            confidence = prediction['outputs'].max()
+            
+            print(f"Window {i+1}: Processing sign '{sign_name}' with confidence {confidence:.4f}")
+
+            # Condition 1 & 2: Check confidence threshold and NaN
+            if confidence < 0.35 or np.isnan(confidence):
+                print(f"Window {i+1}: Confidence {confidence:.4f} below threshold or NaN. Skipping.")
+                continue
+
+            # Condition 3: Check for consecutive duplicates
+            if window_predictions and window_predictions[-1][1] == sign_name:
+                 print(f"Window {i+1}: Sign '{sign_name}' is the same as the previous. Skipping.")
+                 continue
+            
+            # If all checks pass, append the prediction
+            window_predictions.append((i, sign_name, confidence))
+            print(f"Window {i+1}: Added sign '{sign_name}' with confidence {confidence:.4f}")
+        
+        # Print overall most common prediction
+        if window_predictions:
+            print(window_predictions)
+            sign_counts = {}
+            for _, sign, _ in window_predictions:
+                sign_counts[sign] = sign_counts.get(sign, 0) + 1
+            
+            most_common_sign = max(sign_counts.items(), key=lambda x: x[1])[0]
+            print(f"\nMost common prediction: '{most_common_sign}' ({sign_counts[most_common_sign]}/{len(window_predictions)} windows)")
+
+            # --- Ollama Sentence Generation --- 
+            final_signs = [sign for _, sign, _ in window_predictions]
+            print(f"\nFinal filtered signs: {final_signs}")
+
+            if final_signs:
+                OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434/api/generate")
+                OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.1:8b") # Or choose another suitable model
+                
+                sign_string = ", ".join(final_signs)
+                # New prompt focused on simplicity and sign language context
+                prompt = f"Translate the following sequence of sign language words into a simple English phrase. Use only the given words and the absolute minimum necessary connecting words (like 'on', 'in', 'at'). Signs: {sign_string}"
+                
+                print(f"\nSending prompt to Ollama ({OLLAMA_MODEL}): {prompt}")
+                
+                ollama_payload = {
+                    "model": OLLAMA_MODEL,
+                    "prompt": prompt,
+                    "stream": False
+                }
+                
+                try:
+                    response = requests.post(OLLAMA_URL, json=ollama_payload, timeout=60) # Added timeout
+                    response.raise_for_status() # Raise an exception for bad status codes
+                    
+                    ollama_data = response.json()
+                    generated_sentence = ollama_data.get('response', '').strip()
+                    
+                    print(f"\nOllama Generated Sentence: {generated_sentence}")
+                    
+                except requests.exceptions.RequestException as e:
+                    print(f"\nError connecting to Ollama: {e}")
+                    print(f"Ensure Ollama is running at {OLLAMA_URL}")
+                except Exception as e:
+                    print(f"\nError during Ollama request: {e}")
+            else:
+                 print("\nNo signs to send to Ollama.")
+            # --- End Ollama Sentence Generation ---
+
+        else:
+            print("No predictions made")
