@@ -22,7 +22,7 @@ Install dependencies:
 npm install
 ```
 
-## 3. Python Virtual Environments
+## 3. Python Virtual Environments(Both venv creation in root directory only)
 
 ### A. Signs Environment (for MediaPipe)
 ```bash
