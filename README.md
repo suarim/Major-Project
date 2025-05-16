@@ -30,9 +30,9 @@ npm install
 python -m venv signs
 
 # Activate (Windows)
-.\signs\Scripts\activate
+.\signs\Scripts\activate.ps1
 # Or (macOS/Linux)
-source signs/bin/activate
+source signs/bin/activate.ps1
 
 # Install dependencies
 pip install -r signs.txt
@@ -44,9 +44,9 @@ pip install -r signs.txt
 python -m venv gemini-env
 
 # Activate (Windows)
-.\gemini-env\Scripts\activate
+.\gemini-env\Scripts\activate.ps1
 # Or (macOS/Linux)
-source gemini-env/bin/activate
+source gemini-env/bin/activate.ps1
 
 # Install dependencies
 pip install -r gemini.txt
