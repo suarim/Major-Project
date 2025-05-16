@@ -14,7 +14,7 @@ if len(sys.argv) < 2:
 sign_string = sys.argv[1]
 
 # GOOGLE_API_KEY = os.environ.get(
-#     "GEMINI_API_KEY", "AIzaSyDKo6QCqrRkJY9Llaa8d1gX4pACe6Hl-W8"
+#     "GEMINI_API_KEY", ""
 # )
 GOOGLE_API_KEY = os.getenv("GEMINI_API_KEY")
 genai.configure(api_key=GOOGLE_API_KEY)
